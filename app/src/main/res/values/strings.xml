@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">آواپلیر</string>
+    <string name="brand_wordmark">TO Music</string>
+    <string name="add_track">افزودن آهنگ</string>
+    <string name="importing_tracks">در حال افزودن…</string>
+    <string name="offline_banner">حالت آفلاین — پخش آهنگ‌ها از حافظه ذخیره‌شده دستگاه انجام می‌شود.</string>
+    <string name="music_library">کتابخانه موسیقی</string>
+    <string name="active_track_pill">آهنگ فعلی</string>
+    <string name="jump_to_active_desc">پرش به آهنگ در حال پخش</string>
+    <string name="now_playing">در حال پخش</string>
+    <string name="show_in_list">نمایش در لیست</string>
+    <string name="sleep_timer">تایمر خواب</string>
+    <string name="play_action">پخش</string>
+    <string name="pause_action">توقف</string>
+    <string name="next_track_action">آهنگ بعدی</string>
+    <string name="prev_track_action">آهنگ قبلی</string>
+    <string name="shuffle_action">پخش تصادفی</string>
+    <string name="repeat_action">حالت تکرار</string>
+    <string name="lyrics_action">متن آهنگ</string>
+    <string name="equalizer_action">اکولایزر</string>
+    <string name="ringtone_action">زنگ و آلارم</string>
+    <string name="edit_action">ویرایش</string>
+    <string name="close_action">بستن</string>
+</resources>
