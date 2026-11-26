@@ -17,17 +17,21 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
@@ -55,11 +59,11 @@ import androidx.compose.material.icons.rounded.VolumeOff
 import androidx.compose.material.icons.rounded.VolumeUp
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -71,7 +75,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
@@ -86,14 +89,18 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.model.EqPreset
 import com.example.data.model.RepeatMode
+import com.example.data.model.SyncedLyricLine
 import com.example.data.model.TrackEntity
 import com.example.data.model.formatDuration
 import com.example.data.repository.LyricsRepository
+import com.example.ui.PlaybackProgress
 import com.example.ui.theme.JetBrainsMonoFontFamily
 import com.example.ui.theme.LocalAppColors
 import com.example.ui.theme.LocalStrings
+import kotlinx.coroutines.flow.StateFlow
 import kotlin.math.max
 import kotlin.math.roundToInt
 
@@ -101,8 +108,7 @@ import kotlin.math.roundToInt
 fun PlayerStage(
     activeTrack: TrackEntity?,
     isPlaying: Boolean,
-    currentTimeSec: Double,
-    durationSec: Double,
+    progressFlow: StateFlow<PlaybackProgress>,
     volume: Float,
     shuffle: Boolean,
     repeatMode: RepeatMode,
@@ -127,6 +133,7 @@ fun PlayerStage(
     onOpenRingtoneMaker: () -> Unit,
     onOpenEqualizer: () -> Unit,
     onOpenEditTrack: () -> Unit,
+    isFullScreen: Boolean = false,
     onCloseMobileSheet: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
@@ -137,9 +144,19 @@ fun PlayerStage(
         Column(
             modifier = modifier
                 .fillMaxSize()
-                .clip(RoundedCornerShape(26.dp))
-                .background(colors.glassSurface)
-                .border(1.dp, colors.glassBorderStrong, RoundedCornerShape(26.dp))
+                .then(
+                    if (isFullScreen) {
+                        Modifier
+                            .background(colors.sheetBackground)
+                            .statusBarsPadding()
+                            .navigationBarsPadding()
+                    } else {
+                        Modifier
+                            .clip(RoundedCornerShape(26.dp))
+                            .background(colors.glassSurface)
+                            .border(1.dp, colors.glassBorderStrong, RoundedCornerShape(26.dp))
+                    }
+                )
                 .padding(32.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
@@ -173,31 +190,47 @@ fun PlayerStage(
     val parsedLyrics = remember(activeTrack.syncedLyrics) {
         activeTrack.syncedLyrics?.let { LyricsRepository.parseLrcLines(it) } ?: emptyList()
     }
-    val liveLyricLine = remember(parsedLyrics, currentTimeSec) {
-        if (parsedLyrics.isEmpty()) return@remember null
-        var current = parsedLyrics.first().text
-        for (line in parsedLyrics) {
-            if (line.timeSec <= currentTimeSec + 0.05) current = line.text
-            else break
-        }
-        current
-    }
 
     var showSleepMenu by remember { mutableStateOf(false) }
-    val effectiveDuration = if (durationSec > 0.0) durationSec else activeTrack.durationSec
-    val accentA = Color.hsl(
-        activeTrack.accentHue.toFloat(),
-        if (colors.isDark) 0.85f else 0.78f,
-        if (colors.isDark) 0.58f else 0.48f
-    )
-    val accentB = Color.hsl(
-        ((activeTrack.accentHue + 35) % 360).toFloat(),
-        0.88f,
-        if (colors.isDark) 0.66f else 0.52f
-    )
+    val accentA = remember(activeTrack.accentHue, colors.isDark) {
+        Color.hsl(
+            activeTrack.accentHue.toFloat(),
+            if (colors.isDark) 0.85f else 0.78f,
+            if (colors.isDark) 0.58f else 0.48f
+        )
+    }
+    val accentB = remember(activeTrack.accentHue, colors.isDark) {
+        Color.hsl(
+            ((activeTrack.accentHue + 35) % 360).toFloat(),
+            0.88f,
+            if (colors.isDark) 0.66f else 0.52f
+        )
+    }
 
-    Column(
-        modifier = modifier
+    var headerDragDy by remember { mutableFloatStateOf(0f) }
+
+    val containerModifier = if (isFullScreen) {
+        modifier
+            .fillMaxSize()
+            .background(colors.sheetBackground)
+            .background(
+                Brush.verticalGradient(
+                    colors = listOf(
+                        accentA.copy(alpha = if (isPlaying) 0.30f else 0.18f),
+                        colors.sheetBackground.copy(alpha = 0.92f),
+                        colors.sheetBackground
+                    )
+                )
+            )
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = {}
+            )
+            .statusBarsPadding()
+            .navigationBarsPadding()
+    } else {
+        modifier
             .fillMaxSize()
             .clip(RoundedCornerShape(26.dp))
             .background(colors.glassSurface)
@@ -210,23 +243,32 @@ fun PlayerStage(
                 )
             )
             .border(1.dp, colors.glassBorderStrong, RoundedCornerShape(26.dp))
+    }
+
+    Column(
+        modifier = containerModifier
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = 20.dp, vertical = 18.dp),
+            .padding(horizontal = 20.dp, vertical = if (isFullScreen) 10.dp else 18.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        if (onCloseMobileSheet != null) {
-            Box(
-                modifier = Modifier
-                    .padding(bottom = 10.dp)
-                    .size(width = 40.dp, height = 5.dp)
-                    .clip(CircleShape)
-                    .background(colors.handleBar)
-            )
-        }
-
-        // Top Bar
+        // Top Navigation Bar (supports swipe-down to dismiss full-screen player)
         Row(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .then(
+                    if (onCloseMobileSheet != null) {
+                        Modifier.pointerInput(onCloseMobileSheet) {
+                            detectVerticalDragGestures(
+                                onDragStart = { headerDragDy = 0f },
+                                onVerticalDrag = { _, dragAmount -> headerDragDy += dragAmount },
+                                onDragEnd = {
+                                    if (headerDragDy > 70f) onCloseMobileSheet()
+                                    headerDragDy = 0f
+                                }
+                            )
+                        }
+                    } else Modifier
+                ),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -235,15 +277,13 @@ fun PlayerStage(
                     onClick = onCloseMobileSheet,
                     modifier = Modifier
                         .size(44.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(colors.glassSurfaceElevated)
-                        .border(1.dp, colors.glassBorder, RoundedCornerShape(12.dp))
                         .testTag("close_player_sheet_button")
                 ) {
                     Icon(
                         imageVector = Icons.Rounded.KeyboardArrowDown,
                         contentDescription = s.closePlayerSheetDesc,
-                        tint = colors.textSecondary
+                        tint = colors.textStrong,
+                        modifier = Modifier.size(28.dp)
                     )
                 }
             } else {
@@ -263,10 +303,10 @@ fun PlayerStage(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     modifier = Modifier
-                        .heightIn(min = 40.dp)
-                        .clip(RoundedCornerShape(12.dp))
+                        .heightIn(min = 38.dp)
+                        .clip(CircleShape)
                         .background(colors.glassSurfaceElevated)
-                        .border(1.dp, colors.glassBorder, RoundedCornerShape(12.dp))
+                        .border(1.dp, colors.glassBorder, CircleShape)
                         .clickable {
                             onJumpToActiveInList()
                             onCloseMobileSheet?.invoke()
@@ -282,7 +322,7 @@ fun PlayerStage(
                     )
                     Text(
                         text = s.showInList,
-                        fontSize = 12.sp,
+                        fontSize = 11.sp,
                         fontWeight = FontWeight.Medium,
                         color = colors.textSecondary
                     )
@@ -291,10 +331,10 @@ fun PlayerStage(
                 Box {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        horizontalArrangement = Arrangement.spacedBy(5.dp),
                         modifier = Modifier
-                            .heightIn(min = 40.dp)
-                            .clip(RoundedCornerShape(12.dp))
+                            .heightIn(min = 38.dp)
+                            .clip(CircleShape)
                             .background(
                                 if (sleepMinutesLeft != null) colors.accentSky.copy(alpha = 0.2f)
                                 else colors.glassSurfaceElevated
@@ -302,7 +342,7 @@ fun PlayerStage(
                             .border(
                                 1.dp,
                                 if (sleepMinutesLeft != null) colors.accentSky.copy(alpha = 0.45f) else colors.glassBorder,
-                                RoundedCornerShape(12.dp)
+                                CircleShape
                             )
                             .clickable { showSleepMenu = true }
                             .padding(horizontal = 12.dp)
@@ -316,7 +356,7 @@ fun PlayerStage(
                         )
                         Text(
                             text = if (sleepMinutesLeft != null) s.minutesLeft(sleepMinutesLeft) else s.sleepTimer,
-                            fontSize = 12.sp,
+                            fontSize = 11.sp,
                             fontWeight = FontWeight.Medium,
                             color = if (sleepMinutesLeft != null) colors.accentSkySoft else colors.textSecondary
                         )
@@ -348,11 +388,11 @@ fun PlayerStage(
             }
         }
 
-        Spacer(modifier = Modifier.height(22.dp))
+        Spacer(modifier = Modifier.height(if (isFullScreen) 24.dp else 18.dp))
 
-        // Glowing Artwork with swipe left/right to skip track
+        // Glowing Artwork (radial gradient instead of GPU-heavy Modifier.blur for locked 120fps)
         val artScale by animateFloatAsState(
-            targetValue = if (isPlaying) 1f else 0.95f,
+            targetValue = if (isPlaying) 1f else 0.94f,
             animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
             label = "artwork_scale"
         )
@@ -376,8 +416,8 @@ fun PlayerStage(
             if (isPlaying) {
                 val glowTransition = rememberInfiniteTransition(label = "art_glow")
                 val glowAlpha by glowTransition.animateFloat(
-                    initialValue = if (colors.isDark) 0.28f else 0.20f,
-                    targetValue = if (colors.isDark) 0.50f else 0.36f,
+                    initialValue = if (colors.isDark) 0.28f else 0.22f,
+                    targetValue = if (colors.isDark) 0.48f else 0.36f,
                     animationSpec = infiniteRepeatable(
                         animation = tween(2200),
                         repeatMode = AnimRepeatMode.Reverse
@@ -386,17 +426,23 @@ fun PlayerStage(
                 )
                 Box(
                     modifier = Modifier
-                        .size(240.dp)
-                        .blur(26.dp)
+                        .size(292.dp)
                         .alpha(glowAlpha)
-                        .clip(RoundedCornerShape(32.dp))
-                        .background(accentA)
+                        .background(
+                            Brush.radialGradient(
+                                colors = listOf(
+                                    accentA.copy(alpha = 0.72f),
+                                    accentA.copy(alpha = 0.22f),
+                                    Color.Transparent
+                                )
+                            )
+                        )
                 )
             }
 
             AnimatedContent(
                 targetState = activeTrack,
-                transitionSpec = { fadeIn(tween(220)) togetherWith fadeOut(tween(180)) },
+                transitionSpec = { fadeIn(tween(200)) togetherWith fadeOut(tween(160)) },
                 label = "artwork_switch"
             ) { track ->
                 TrackArtwork(
@@ -452,18 +498,12 @@ fun PlayerStage(
 
             Spacer(modifier = Modifier.width(12.dp))
 
-            Box(
-                contentAlignment = Alignment.Center,
+            IconButton(
+                onClick = { onToggleFavorite(activeTrack.id) },
                 modifier = Modifier
                     .size(48.dp)
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(if (activeTrack.isFavorite) colors.accentRose.copy(alpha = 0.2f) else colors.glassSurfaceElevated)
-                    .border(
-                        1.dp,
-                        if (activeTrack.isFavorite) colors.accentRose.copy(alpha = 0.45f) else colors.glassBorder,
-                        RoundedCornerShape(16.dp)
-                    )
-                    .clickable { onToggleFavorite(activeTrack.id) }
+                    .clip(CircleShape)
+                    .background(if (activeTrack.isFavorite) colors.accentRose.copy(alpha = 0.16f) else colors.glassSurfaceElevated)
                     .testTag("player_favorite_button")
             ) {
                 Icon(
@@ -475,78 +515,29 @@ fun PlayerStage(
             }
         }
 
-        // Live lyric preview pill
-        if (!liveLyricLine.isNullOrBlank()) {
-            Spacer(modifier = Modifier.height(12.dp))
-            Box(
-                contentAlignment = Alignment.Center,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .widthIn(max = 440.dp)
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(colors.glassSurfaceElevated)
-                    .border(1.dp, colors.glassBorder, RoundedCornerShape(16.dp))
-                    .clickable { onOpenLyrics() }
-                    .padding(horizontal = 16.dp, vertical = 10.dp)
-                    .testTag("live_lyric_preview_pill")
-            ) {
-                Text(
-                    text = liveLyricLine,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = colors.accentSkyText,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    textAlign = TextAlign.Center
-                )
-            }
+        // Live Lyric Preview Pill (scoped progress collection)
+        if (parsedLyrics.isNotEmpty()) {
+            LiveLyricPreviewBanner(
+                parsedLyrics = parsedLyrics,
+                progressFlow = progressFlow,
+                onClick = onOpenLyrics
+            )
         }
 
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(14.dp))
 
-        // Seek bar (LTR)
-        CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .widthIn(max = 440.dp)
-            ) {
-                Slider(
-                    value = currentTimeSec.toFloat().coerceIn(0f, max(1f, effectiveDuration.toFloat())),
-                    onValueChange = { onSeek(it.toDouble()) },
-                    valueRange = 0f..max(1f, effectiveDuration.toFloat()),
-                    colors = SliderDefaults.colors(
-                        thumbColor = accentB,
-                        activeTrackColor = accentA,
-                        inactiveTrackColor = colors.sliderInactive
-                    ),
-                    modifier = Modifier.testTag("player_seek_slider")
-                )
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 4.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text(
-                        text = formatDuration(currentTimeSec),
-                        fontFamily = JetBrainsMonoFontFamily,
-                        fontSize = 12.sp,
-                        color = colors.textMuted
-                    )
-                    Text(
-                        text = formatDuration(effectiveDuration),
-                        fontFamily = JetBrainsMonoFontFamily,
-                        fontSize = 12.sp,
-                        color = colors.textMuted
-                    )
-                }
-            }
-        }
+        // Seek Bar (scoped progress collection — zero parent recomposition!)
+        SeekBarSection(
+            fallbackDurationSec = activeTrack.durationSec,
+            progressFlow = progressFlow,
+            accentA = accentA,
+            accentB = accentB,
+            onSeek = onSeek
+        )
 
         Spacer(modifier = Modifier.height(10.dp))
 
-        // Transport controls (LTR)
+        // Transport Controls (LTR)
         CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
             Row(
                 modifier = Modifier
@@ -559,39 +550,38 @@ fun PlayerStage(
                     onClick = onToggleShuffle,
                     modifier = Modifier
                         .size(48.dp)
-                        .clip(RoundedCornerShape(14.dp))
-                        .background(if (shuffle) colors.accentSky.copy(alpha = 0.2f) else Color.Transparent)
+                        .clip(CircleShape)
+                        .background(if (shuffle) colors.accentSky.copy(alpha = 0.18f) else Color.Transparent)
                         .testTag("shuffle_button")
                 ) {
                     Icon(
                         imageVector = Icons.Rounded.Shuffle,
                         contentDescription = s.shuffleDesc,
                         tint = if (shuffle) colors.accentSkyText else colors.textMuted,
-                        modifier = Modifier.size(20.dp)
+                        modifier = Modifier.size(21.dp)
                     )
                 }
 
                 IconButton(
                     onClick = onPrev,
                     modifier = Modifier
-                        .size(50.dp)
-                        .clip(RoundedCornerShape(16.dp))
+                        .size(52.dp)
+                        .clip(CircleShape)
                         .background(colors.glassSurfaceElevated)
-                        .border(1.dp, colors.glassBorder, RoundedCornerShape(16.dp))
                         .testTag("prev_track_button")
                 ) {
                     Icon(
                         imageVector = Icons.Rounded.SkipPrevious,
                         contentDescription = s.prevTrackDesc,
                         tint = colors.textStrong,
-                        modifier = Modifier.size(24.dp)
+                        modifier = Modifier.size(26.dp)
                     )
                 }
 
                 IconButton(
                     onClick = onTogglePlay,
                     modifier = Modifier
-                        .size(68.dp)
+                        .size(72.dp)
                         .clip(CircleShape)
                         .background(colors.primaryBtnBg)
                         .testTag("play_pause_button")
@@ -600,24 +590,23 @@ fun PlayerStage(
                         imageVector = if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
                         contentDescription = if (isPlaying) s.pauseDesc else s.playDesc,
                         tint = colors.primaryBtnFg,
-                        modifier = Modifier.size(32.dp)
+                        modifier = Modifier.size(34.dp)
                     )
                 }
 
                 IconButton(
                     onClick = onNext,
                     modifier = Modifier
-                        .size(50.dp)
-                        .clip(RoundedCornerShape(16.dp))
+                        .size(52.dp)
+                        .clip(CircleShape)
                         .background(colors.glassSurfaceElevated)
-                        .border(1.dp, colors.glassBorder, RoundedCornerShape(16.dp))
                         .testTag("next_track_button")
                 ) {
                     Icon(
                         imageVector = Icons.Rounded.SkipNext,
                         contentDescription = s.nextTrackDesc,
                         tint = colors.textStrong,
-                        modifier = Modifier.size(24.dp)
+                        modifier = Modifier.size(26.dp)
                     )
                 }
 
@@ -625,15 +614,15 @@ fun PlayerStage(
                     onClick = onCycleRepeat,
                     modifier = Modifier
                         .size(48.dp)
-                        .clip(RoundedCornerShape(14.dp))
-                        .background(if (repeatMode != RepeatMode.OFF) colors.accentSky.copy(alpha = 0.2f) else Color.Transparent)
+                        .clip(CircleShape)
+                        .background(if (repeatMode != RepeatMode.OFF) colors.accentSky.copy(alpha = 0.18f) else Color.Transparent)
                         .testTag("repeat_button")
                 ) {
                     Icon(
                         imageVector = if (repeatMode == RepeatMode.ONE) Icons.Rounded.RepeatOne else Icons.Rounded.Repeat,
                         contentDescription = s.repeatDesc,
                         tint = if (repeatMode != RepeatMode.OFF) colors.accentSkyText else colors.textMuted,
-                        modifier = Modifier.size(20.dp)
+                        modifier = Modifier.size(21.dp)
                     )
                 }
             }
@@ -697,7 +686,7 @@ fun PlayerStage(
             )
         }
 
-        Spacer(modifier = Modifier.height(14.dp))
+        Spacer(modifier = Modifier.height(12.dp))
 
         // Volume Control (LTR)
         CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
@@ -720,15 +709,13 @@ fun PlayerStage(
                     )
                 }
 
-                Slider(
+                SleekSlider(
                     value = volume,
                     onValueChange = onVolumeChange,
                     valueRange = 0f..1f,
-                    colors = SliderDefaults.colors(
-                        thumbColor = colors.accentSky,
-                        activeTrackColor = colors.accentSky,
-                        inactiveTrackColor = colors.sliderInactive
-                    ),
+                    thumbColor = colors.accentSky,
+                    activeTrackColor = colors.accentSky,
+                    inactiveTrackColor = colors.sliderInactive,
                     modifier = Modifier.weight(1f)
                 )
 
@@ -792,7 +779,6 @@ fun PlayerStage(
                             .heightIn(min = 48.dp)
                             .clip(RoundedCornerShape(14.dp))
                             .background(colors.glassSurfaceElevated)
-                            .border(1.dp, colors.glassBorder, RoundedCornerShape(14.dp))
                             .clickable { onSelectTrack(item) }
                             .padding(horizontal = 12.dp, vertical = 8.dp),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -832,6 +818,149 @@ fun PlayerStage(
 }
 
 @Composable
+private fun LiveLyricPreviewBanner(
+    parsedLyrics: List<SyncedLyricLine>,
+    progressFlow: StateFlow<PlaybackProgress>,
+    onClick: () -> Unit
+) {
+    val colors = LocalAppColors.current
+    val progress by progressFlow.collectAsStateWithLifecycle()
+    val currentTimeSec = progress.currentTimeSec
+    val liveLyricLine = remember(parsedLyrics, currentTimeSec) {
+        if (parsedLyrics.isEmpty()) return@remember null
+        var current = parsedLyrics.first().text
+        for (line in parsedLyrics) {
+            if (line.timeSec <= currentTimeSec + 0.05) current = line.text
+            else break
+        }
+        current
+    }
+    if (!liveLyricLine.isNullOrBlank()) {
+        Spacer(modifier = Modifier.height(12.dp))
+        Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier
+                .fillMaxWidth()
+                .widthIn(max = 440.dp)
+                .clip(RoundedCornerShape(14.dp))
+                .background(colors.glassSurfaceElevated)
+                .clickable(onClick = onClick)
+                .padding(horizontal = 16.dp, vertical = 10.dp)
+                .testTag("live_lyric_preview_pill")
+        ) {
+            Text(
+                text = liveLyricLine,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Medium,
+                color = colors.accentSkyText,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center
+            )
+        }
+    }
+}
+
+@Composable
+private fun SeekBarSection(
+    fallbackDurationSec: Double,
+    progressFlow: StateFlow<PlaybackProgress>,
+    accentA: Color,
+    accentB: Color,
+    onSeek: (Double) -> Unit
+) {
+    val colors = LocalAppColors.current
+    val progress by progressFlow.collectAsStateWithLifecycle()
+    val effectiveDuration = if (progress.durationSec > 0.0) progress.durationSec else fallbackDurationSec
+    val currentTimeSec = progress.currentTimeSec
+
+    CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .widthIn(max = 440.dp)
+        ) {
+            SleekSlider(
+                value = currentTimeSec.toFloat().coerceIn(0f, max(1f, effectiveDuration.toFloat())),
+                onValueChange = { onSeek(it.toDouble()) },
+                valueRange = 0f..max(1f, effectiveDuration.toFloat()),
+                thumbColor = accentB,
+                activeTrackColor = accentA,
+                inactiveTrackColor = colors.sliderInactive,
+                modifier = Modifier.testTag("player_seek_slider")
+            )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 4.dp),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = formatDuration(currentTimeSec),
+                    fontFamily = JetBrainsMonoFontFamily,
+                    fontSize = 11.sp,
+                    color = colors.textMuted
+                )
+                Text(
+                    text = formatDuration(effectiveDuration),
+                    fontFamily = JetBrainsMonoFontFamily,
+                    fontSize = 11.sp,
+                    color = colors.textMuted
+                )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun SleekSlider(
+    value: Float,
+    onValueChange: (Float) -> Unit,
+    valueRange: ClosedFloatingPointRange<Float>,
+    thumbColor: Color,
+    activeTrackColor: Color,
+    inactiveTrackColor: Color,
+    modifier: Modifier = Modifier
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    Slider(
+        value = value,
+        onValueChange = onValueChange,
+        valueRange = valueRange,
+        interactionSource = interactionSource,
+        thumb = {
+            Box(
+                modifier = Modifier
+                    .size(14.dp)
+                    .clip(CircleShape)
+                    .background(thumbColor)
+            )
+        },
+        track = { sliderState ->
+            val span = (sliderState.valueRange.endInclusive - sliderState.valueRange.start).coerceAtLeast(1e-4f)
+            val fraction = ((sliderState.value - sliderState.valueRange.start) / span).coerceIn(0f, 1f)
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(4.dp)
+                    .clip(CircleShape)
+                    .background(inactiveTrackColor)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(fraction)
+                        .fillMaxHeight()
+                        .clip(CircleShape)
+                        .background(activeTrackColor)
+                )
+            }
+        },
+        modifier = modifier
+    )
+}
+
+@Composable
 private fun QuickToolButton(
     label: String,
     icon: ImageVector,
@@ -847,14 +976,9 @@ private fun QuickToolButton(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
         modifier = modifier
-            .heightIn(min = 56.dp)
+            .heightIn(min = 54.dp)
             .clip(shape)
             .background(if (highlighted) highlightColor.copy(alpha = 0.16f) else colors.glassSurfaceElevated)
-            .border(
-                1.dp,
-                if (highlighted) highlightColor.copy(alpha = 0.38f) else colors.glassBorder,
-                shape
-            )
             .clickable(onClick = onClick)
             .padding(horizontal = 6.dp, vertical = 8.dp)
     ) {
@@ -880,8 +1004,7 @@ private fun QuickToolButton(
 fun MobileMiniPlayer(
     activeTrack: TrackEntity,
     isPlaying: Boolean,
-    currentTimeSec: Double,
-    durationSec: Double,
+    progressFlow: StateFlow<PlaybackProgress>,
     onTogglePlay: () -> Unit,
     onNext: () -> Unit,
     onExpand: () -> Unit,
@@ -889,23 +1012,20 @@ fun MobileMiniPlayer(
 ) {
     val colors = LocalAppColors.current
     val s = LocalStrings.current
-    val effectiveDuration = if (durationSec > 0.0) durationSec else activeTrack.durationSec
-    val progress = if (effectiveDuration > 0.0) {
-        (currentTimeSec / effectiveDuration).toFloat().coerceIn(0f, 1f)
-    } else 0f
-    val accent = Color.hsl(
-        activeTrack.accentHue.toFloat(),
-        0.85f,
-        if (colors.isDark) 0.64f else 0.48f
-    )
+    val accent = remember(activeTrack.accentHue, colors.isDark) {
+        Color.hsl(
+            activeTrack.accentHue.toFloat(),
+            0.85f,
+            if (colors.isDark) 0.64f else 0.48f
+        )
+    }
     var dragDy by remember { mutableFloatStateOf(0f) }
 
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(20.dp))
             .background(colors.modalBackground)
-            .border(1.dp, colors.glassBorderStrong, RoundedCornerShape(20.dp))
+            .navigationBarsPadding()
             .pointerInput(activeTrack.id) {
                 detectVerticalDragGestures(
                     onDragStart = { dragDy = 0f },
@@ -918,49 +1038,27 @@ fun MobileMiniPlayer(
             }
             .testTag("mobile_mini_player")
     ) {
-        // Progress line (LTR)
-        CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(2.5.dp)
-                    .background(colors.sliderInactive)
-            ) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth(progress)
-                        .height(2.5.dp)
-                        .background(accent)
-                )
-            }
-        }
-
-        // Drag handle
-        Box(
-            modifier = Modifier
-                .padding(top = 6.dp)
-                .size(width = 32.dp, height = 3.5.dp)
-                .clip(CircleShape)
-                .background(colors.handleBar)
-                .align(Alignment.CenterHorizontally)
+        // Hairline top progress bar (scoped so parent rows never recompose)
+        MiniProgressLine(
+            fallbackDurationSec = activeTrack.durationSec,
+            progressFlow = progressFlow,
+            accent = accent,
+            inactiveColor = colors.sliderInactive
         )
 
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .heightIn(min = 58.dp)
-                .padding(horizontal = 12.dp, vertical = 6.dp),
+                .heightIn(min = 62.dp)
+                .clickable(onClick = onExpand)
+                .padding(horizontal = 14.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
             Row(
-                modifier = Modifier
-                    .weight(1f)
-                    .clip(RoundedCornerShape(14.dp))
-                    .clickable(onClick = onExpand)
-                    .padding(vertical = 2.dp),
+                modifier = Modifier.weight(1f),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 TrackArtwork(
                     title = activeTrack.title,
@@ -1006,7 +1104,7 @@ fun MobileMiniPlayer(
                         onClick = onTogglePlay,
                         modifier = Modifier
                             .size(44.dp)
-                            .clip(RoundedCornerShape(14.dp))
+                            .clip(CircleShape)
                             .background(colors.primaryBtnBg)
                             .testTag("mini_play_pause_button")
                     ) {
@@ -1022,18 +1120,48 @@ fun MobileMiniPlayer(
                         onClick = onNext,
                         modifier = Modifier
                             .size(44.dp)
-                            .clip(RoundedCornerShape(14.dp))
+                            .clip(CircleShape)
                             .testTag("mini_next_button")
                     ) {
                         Icon(
                             imageVector = Icons.Rounded.SkipNext,
                             contentDescription = s.nextShortDesc,
                             tint = colors.textSecondary,
-                            modifier = Modifier.size(20.dp)
+                            modifier = Modifier.size(22.dp)
                         )
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun MiniProgressLine(
+    fallbackDurationSec: Double,
+    progressFlow: StateFlow<PlaybackProgress>,
+    accent: Color,
+    inactiveColor: Color
+) {
+    val progressState by progressFlow.collectAsStateWithLifecycle()
+    val effectiveDuration = if (progressState.durationSec > 0.0) progressState.durationSec else fallbackDurationSec
+    val ratio = if (effectiveDuration > 0.0) {
+        (progressState.currentTimeSec / effectiveDuration).toFloat().coerceIn(0f, 1f)
+    } else 0f
+
+    CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(2.5.dp)
+                .background(inactiveColor)
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth(ratio)
+                    .height(2.5.dp)
+                    .background(accent)
+            )
         }
     }
 }

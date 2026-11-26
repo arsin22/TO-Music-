@@ -89,17 +89,20 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.model.LyricSearchResult
 import com.example.data.model.SyncedLyricLine
 import com.example.data.model.TrackEntity
 import com.example.data.model.formatDuration
 import com.example.data.repository.LyricsRepository
+import com.example.ui.PlaybackProgress
 import com.example.ui.theme.Emerald600
 import com.example.ui.theme.Indigo600
 import com.example.ui.theme.JetBrainsMonoFontFamily
 import com.example.ui.theme.LocalAppColors
 import com.example.ui.theme.LocalStrings
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlin.math.max
@@ -112,8 +115,7 @@ private val rtlRegex = Regex("""[\u0600-\u06FF]""")
 @Composable
 fun LyricsModal(
     track: TrackEntity,
-    currentTimeSec: Double,
-    durationSec: Double,
+    progressFlow: StateFlow<PlaybackProgress>,
     isPlaying: Boolean,
     playbackRate: Float,
     onTogglePlay: () -> Unit,
@@ -121,6 +123,9 @@ fun LyricsModal(
     onSaveLyrics: (trackId: String, plainLyrics: String?, syncedLyrics: String?) -> Unit,
     onClose: () -> Unit
 ) {
+    val progress by progressFlow.collectAsStateWithLifecycle()
+    val currentTimeSec = progress.currentTimeSec
+    val durationSec = progress.durationSec
     val colors = LocalAppColors.current
     val s = LocalStrings.current
     val scope = rememberCoroutineScope()
@@ -1042,9 +1047,7 @@ private fun SyncedLyricLineItem(
                     fontWeight = FontWeight.SemiBold,
                     lineHeight = 26.sp,
                     color = colors.textSecondary,
-                    modifier = Modifier
-                        .weight(1f)
-                        .then(if (distance > 1) Modifier.blur(1.dp) else Modifier)
+                    modifier = Modifier.weight(1f)
                 )
             }
 

@@ -29,19 +29,27 @@ import com.example.data.model.TrackEntity
 import com.example.data.repository.MusicRepository
 import com.example.ui.theme.resolveIsPersian
 import com.google.common.util.concurrent.ListenableFuture
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.io.File
+
+data class PlaybackProgress(
+    val currentTimeSec: Double = 0.0,
+    val durationSec: Double = 0.0
+)
 
 data class PlayerUiState(
     val allTracks: List<TrackEntity> = emptyList(),
@@ -60,8 +68,6 @@ data class PlayerUiState(
     val themeMode: AppThemeMode = AppThemeMode.DARK,
     val appLanguage: AppLanguage = AppLanguage.SYSTEM,
     val isPlaying: Boolean = false,
-    val currentTimeSec: Double = 0.0,
-    val durationSec: Double = 0.0,
     val volume: Float = 0.85f,
     val shuffle: Boolean = false,
     val repeatMode: RepeatMode = RepeatMode.ALL,
@@ -84,7 +90,8 @@ data class PlayerUiState(
     val showLyricsModal: Boolean = false,
     val showRingtoneModal: Boolean = false,
     val showEqModal: Boolean = false,
-    val showEditModal: Boolean = false
+    val showEditModal: Boolean = false,
+    val showSettingsModal: Boolean = false
 )
 
 @OptIn(FlowPreview::class)
@@ -112,8 +119,9 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
 
     private val _activeTrackId = MutableStateFlow<String?>(null)
     private val _isPlaying = MutableStateFlow(false)
-    private val _currentTimeSec = MutableStateFlow(0.0)
-    private val _durationSec = MutableStateFlow(0.0)
+    private val _playbackProgress = MutableStateFlow(PlaybackProgress())
+    val playbackProgressFlow: StateFlow<PlaybackProgress> = _playbackProgress.asStateFlow()
+
     private val _shuffle = MutableStateFlow(false)
     private val _repeatMode = MutableStateFlow(RepeatMode.ALL)
     private val _manualQueueIds = MutableStateFlow<List<String>>(emptyList())
@@ -135,12 +143,11 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     private val _showRingtoneModal = MutableStateFlow(false)
     private val _showEqModal = MutableStateFlow(false)
     private val _showEditModal = MutableStateFlow(false)
+    private val _showSettingsModal = MutableStateFlow(false)
 
     private data class PlaybackControlState(
         val activeTrackId: String?,
         val isPlaying: Boolean,
-        val currentTimeSec: Double,
-        val durationSec: Double,
         val volume: Float,
         val shuffle: Boolean,
         val repeatMode: RepeatMode,
@@ -176,7 +183,8 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         val showLyrics: Boolean,
         val showRingtone: Boolean,
         val showEq: Boolean,
-        val showEdit: Boolean
+        val showEdit: Boolean,
+        val showSettings: Boolean
     )
 
     private val _eqPreset = MutableStateFlow(EqPreset.FLAT)
@@ -187,8 +195,6 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     private val playbackControlFlow = combine(
         _activeTrackId,
         _isPlaying,
-        _currentTimeSec,
-        _durationSec,
         _volume,
         _shuffle,
         _repeatMode,
@@ -198,13 +204,11 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         PlaybackControlState(
             activeTrackId = arr[0] as String?,
             isPlaying = arr[1] as Boolean,
-            currentTimeSec = arr[2] as Double,
-            durationSec = arr[3] as Double,
-            volume = arr[4] as Float,
-            shuffle = arr[5] as Boolean,
-            repeatMode = arr[6] as RepeatMode,
-            manualQueueIds = @Suppress("UNCHECKED_CAST") (arr[7] as List<String>),
-            sleepMinutesLeft = arr[8] as Int?
+            volume = arr[2] as Float,
+            shuffle = arr[3] as Boolean,
+            repeatMode = arr[4] as RepeatMode,
+            manualQueueIds = @Suppress("UNCHECKED_CAST") (arr[5] as List<String>),
+            sleepMinutesLeft = arr[6] as Int?
         )
     }
 
@@ -238,8 +242,8 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         combine(_eqPreset, _eqGains, _playbackRate) { a, b, c ->
             listOf(a, b, c)
         },
-        combine(_modalTrackId, _showLyricsModal, _showRingtoneModal, _showEqModal, _showEditModal) { a, b, c, d, e ->
-            listOf(a, b, c, d, e)
+        combine(_modalTrackId, _showLyricsModal, _showRingtoneModal, _showEqModal, _showEditModal, _showSettingsModal) { arr ->
+            arr
         }
     ) { p1, p2, p3, p4 ->
         UiMetaState(
@@ -260,7 +264,8 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
             showLyrics = p4[1] as Boolean,
             showRingtone = p4[2] as Boolean,
             showEq = p4[3] as Boolean,
-            showEdit = p4[4] as Boolean
+            showEdit = p4[4] as Boolean,
+            showSettings = p4[5] as Boolean
         )
     }
 
@@ -295,8 +300,6 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
             themeMode = meta.themeMode,
             appLanguage = meta.appLanguage,
             isPlaying = playback.isPlaying,
-            currentTimeSec = playback.currentTimeSec,
-            durationSec = playback.durationSec,
             volume = playback.volume,
             shuffle = playback.shuffle,
             repeatMode = playback.repeatMode,
@@ -319,13 +322,15 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
             showLyricsModal = meta.showLyrics,
             showRingtoneModal = meta.showRingtone,
             showEqModal = meta.showEq,
-            showEditModal = meta.showEdit
+            showEditModal = meta.showEdit,
+            showSettingsModal = meta.showSettings
         )
-    }.stateIn(
-        scope = viewModelScope,
-        started = SharingStarted.WhileSubscribed(5000),
-        initialValue = PlayerUiState()
-    )
+    }.flowOn(Dispatchers.Default)
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = PlayerUiState()
+        )
 
     init {
         bootstrap()
@@ -359,7 +364,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
                         .sortedByDescending { it.lastPlayedAt ?: 0L }
                         .firstOrNull() ?: loaded.first()
                     _activeTrackId.value = recentTrack.id
-                    _durationSec.value = recentTrack.durationSec
+                    _playbackProgress.value = PlaybackProgress(0.0, recentTrack.durationSec)
                 }
             } catch (_: Throwable) {
                 showNotice(if (isFaNow()) "خطا در بارگذاری کتابخانه موسیقی." else "Error loading music library.")
@@ -369,21 +374,30 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    fun setThemeMode(mode: AppThemeMode) {
+        if (_themeMode.value == mode) return
+        _themeMode.value = mode
+        viewModelScope.launch {
+            preferences.saveThemeMode(mode)
+        }
+    }
+
     fun toggleThemeMode() {
         val next = if (_themeMode.value == AppThemeMode.DARK) AppThemeMode.LIGHT else AppThemeMode.DARK
-        _themeMode.value = next
+        setThemeMode(next)
+    }
+
+    fun setLanguage(language: AppLanguage) {
+        if (_appLanguage.value == language) return
+        _appLanguage.value = language
         viewModelScope.launch {
-            preferences.saveThemeMode(next)
+            preferences.saveLanguage(language)
         }
     }
 
     fun toggleLanguage() {
         val currentlyFa = isFaNow()
-        val next = if (currentlyFa) AppLanguage.EN else AppLanguage.FA
-        _appLanguage.value = next
-        viewModelScope.launch {
-            preferences.saveLanguage(next)
-        }
+        setLanguage(if (currentlyFa) AppLanguage.EN else AppLanguage.FA)
     }
 
     fun requiredAudioPermission(): String = repository.requiredAudioPermission()
@@ -444,7 +458,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
             if (_activeTrackId.value == null && tracksNow.isNotEmpty()) {
                 val first = tracksNow.first()
                 _activeTrackId.value = first.id
-                _durationSec.value = first.durationSec
+                _playbackProgress.value = PlaybackProgress(0.0, first.durationSec)
             }
             if (!quiet && result.addedCount > 0) {
                 showNotice(
@@ -489,7 +503,9 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
                         if (playbackState == Player.STATE_READY) {
                             val durMs = controller.duration
                             if (durMs > 0 && durMs != androidx.media3.common.C.TIME_UNSET) {
-                                _durationSec.value = durMs / 1000.0
+                                _playbackProgress.value = _playbackProgress.value.copy(
+                                    durationSec = durMs / 1000.0
+                                )
                             }
                         } else if (playbackState == Player.STATE_ENDED) {
                             handlePlayNext(fromTrackEnded = true)
@@ -512,10 +528,15 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
             _activeTrackId.value = it
         }
         val dur = controller.duration
-        if (dur > 0 && dur != androidx.media3.common.C.TIME_UNSET) {
-            _durationSec.value = dur / 1000.0
+        val resolvedDur = if (dur > 0 && dur != androidx.media3.common.C.TIME_UNSET) {
+            dur / 1000.0
+        } else {
+            _playbackProgress.value.durationSec
         }
-        _currentTimeSec.value = (controller.currentPosition / 1000.0).coerceAtLeast(0.0)
+        _playbackProgress.value = PlaybackProgress(
+            currentTimeSec = (controller.currentPosition / 1000.0).coerceAtLeast(0.0),
+            durationSec = resolvedDur
+        )
         if (controller.isPlaying) {
             startPositionPolling()
         }
@@ -527,13 +548,17 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
             while (isActive) {
                 val controller = mediaController
                 if (controller != null && controller.isPlaying) {
-                    _currentTimeSec.value = (controller.currentPosition / 1000.0).coerceAtLeast(0.0)
+                    val pos = (controller.currentPosition / 1000.0).coerceAtLeast(0.0)
                     val dur = controller.duration
-                    if (dur > 0 && dur != androidx.media3.common.C.TIME_UNSET) {
-                        _durationSec.value = dur / 1000.0
+                    val durSec = if (dur > 0 && dur != androidx.media3.common.C.TIME_UNSET) {
+                        dur / 1000.0
+                    } else {
+                        _playbackProgress.value.durationSec
                     }
+                    _playbackProgress.value = PlaybackProgress(pos, durSec)
                 }
-                delay(50L)
+                val fastPoll = _showLyricsModal.value || _isMobileSheetOpen.value
+                delay(if (fastPoll) 100L else 240L)
             }
         }
     }
@@ -580,8 +605,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         }
 
         _activeTrackId.value = track.id
-        _currentTimeSec.value = 0.0
-        _durationSec.value = track.durationSec
+        _playbackProgress.value = PlaybackProgress(0.0, track.durationSec)
 
         val controller = mediaController ?: run {
             showNotice(
@@ -672,7 +696,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
             controller.seekTo(0L)
             controller.play()
             _isPlaying.value = true
-            _currentTimeSec.value = 0.0
+            _playbackProgress.value = _playbackProgress.value.copy(currentTimeSec = 0.0)
             return
         }
 
@@ -702,7 +726,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
 
         if (fromTrackEnded && isLast && _repeatMode.value == RepeatMode.OFF) {
             _isPlaying.value = false
-            _currentTimeSec.value = 0.0
+            _playbackProgress.value = _playbackProgress.value.copy(currentTimeSec = 0.0)
             controller?.pause()
             controller?.seekTo(0L)
             return
@@ -716,7 +740,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         val controller = mediaController
         if (controller != null && controller.currentPosition > 3000L) {
             controller.seekTo(0L)
-            _currentTimeSec.value = 0.0
+            _playbackProgress.value = _playbackProgress.value.copy(currentTimeSec = 0.0)
             return
         }
 
@@ -730,9 +754,10 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun seekTo(seconds: Double) {
-        val clampedMs = (seconds.coerceAtLeast(0.0) * 1000.0).toLong()
+        val clampedSec = seconds.coerceAtLeast(0.0)
+        val clampedMs = (clampedSec * 1000.0).toLong()
         mediaController?.seekTo(clampedMs)
-        _currentTimeSec.value = seconds.coerceAtLeast(0.0)
+        _playbackProgress.value = _playbackProgress.value.copy(currentTimeSec = clampedSec)
     }
 
     fun setVolume(vol: Float) {
@@ -825,7 +850,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
                 val added = repository.loadStarterTracks(isFa)
                 if (_activeTrackId.value == null && added.isNotEmpty()) {
                     _activeTrackId.value = added.first().id
-                    _durationSec.value = added.first().durationSec
+                    _playbackProgress.value = PlaybackProgress(0.0, added.first().durationSec)
                 }
                 showNotice(
                     if (isFa) "قطعات نمونه به کتابخانه اضافه شدند."
@@ -878,13 +903,12 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
                     mediaController?.stop()
                     mediaController?.clearMediaItems()
                     _isPlaying.value = false
-                    _currentTimeSec.value = 0.0
+                    _playbackProgress.value = PlaybackProgress(0.0, 0.0)
 
                     if (remaining.isNotEmpty()) {
                         loadAndPlayTrack(remaining.first(), false)
                     } else {
                         _activeTrackId.value = null
-                        _durationSec.value = 0.0
                     }
                 }
                 showNotice(
@@ -1075,6 +1099,14 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
 
     fun closeEditModal() {
         _showEditModal.value = false
+    }
+
+    fun openSettingsModal() {
+        _showSettingsModal.value = true
+    }
+
+    fun closeSettingsModal() {
+        _showSettingsModal.value = false
     }
 
     private fun filterAndSortTracks(

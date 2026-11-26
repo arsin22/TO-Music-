@@ -16,13 +16,14 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -34,10 +35,8 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
@@ -46,19 +45,15 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.CheckCircle
-import androidx.compose.material.icons.rounded.DarkMode
-import androidx.compose.material.icons.rounded.LightMode
-import androidx.compose.material.icons.rounded.MyLocation
-import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.WifiOff
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
@@ -69,7 +64,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -95,6 +89,7 @@ import com.example.ui.components.LyricsModal
 import com.example.ui.components.MobileMiniPlayer
 import com.example.ui.components.PlayerStage
 import com.example.ui.components.RingtoneMakerModal
+import com.example.ui.components.SettingsModal
 import com.example.ui.components.TrackListPanel
 import com.example.ui.theme.Indigo600
 import com.example.ui.theme.LocalAppColors
@@ -136,7 +131,6 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ToMusicApp(
     viewModel: PlayerViewModel
@@ -148,6 +142,7 @@ fun ToMusicApp(
     val lifecycleOwner = LocalLifecycleOwner.current
     val audioPermission = remember { viewModel.requiredAudioPermission() }
     var askedPermissionOnce by remember { mutableStateOf(false) }
+    var isSearchOpen by remember { mutableStateOf(false) }
 
     // Runtime permission launcher for audio discovery + optional notification permission (API 33+)
     val permissionsLauncher = rememberLauncherForActivityResult(
@@ -222,7 +217,7 @@ fun ToMusicApp(
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    // Fallback SAF multi-file audio + ZIP picker (only shown in empty/permission helper state)
+    // Fallback SAF multi-file audio + ZIP picker (only triggered from Settings or empty-state fallback)
     val filePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenMultipleDocuments()
     ) { uris ->
@@ -231,36 +226,52 @@ fun ToMusicApp(
         }
     }
 
-    val openAudioPicker = {
+    val openAudioPicker: () -> Unit = {
         filePickerLauncher.launch(
             arrayOf("audio/*", "application/zip", "application/x-zip-compressed")
         )
     }
 
-    // Handle back press when mobile full-screen player sheet or album/artist drilldown is open
-    BackHandler(enabled = state.isMobileSheetOpen || state.selectedAlbum != null || state.selectedArtist != null || state.isSelectionMode) {
+    // Handle back press cleanly across overlays and drill-down views
+    BackHandler(
+        enabled = state.showSettingsModal ||
+            state.isMobileSheetOpen ||
+            state.selectedAlbum != null ||
+            state.selectedArtist != null ||
+            state.isSelectionMode ||
+            isSearchOpen ||
+            state.searchQuery.isNotEmpty()
+    ) {
         when {
+            state.showSettingsModal -> viewModel.closeSettingsModal()
             state.isMobileSheetOpen -> viewModel.setMobileSheetOpen(false)
             state.isSelectionMode -> viewModel.exitSelectionMode()
             state.selectedAlbum != null -> viewModel.selectAlbum(null)
             state.selectedArtist != null -> viewModel.selectArtist(null)
+            state.searchQuery.isNotEmpty() -> {
+                viewModel.setSearchQuery("")
+                isSearchOpen = false
+            }
+            isSearchOpen -> isSearchOpen = false
         }
     }
 
-    val ambientGlowColor = state.activeTrack?.let {
-        Color.hsl(it.accentHue.toFloat(), 0.80f, if (colors.isDark) 0.45f else 0.62f)
-    } ?: Indigo600
+    val ambientGlowColor = remember(state.activeTrack?.accentHue, colors.isDark) {
+        state.activeTrack?.let {
+            Color.hsl(it.accentHue.toFloat(), 0.80f, if (colors.isDark) 0.45f else 0.62f)
+        } ?: Indigo600
+    }
 
     Scaffold(
         containerColor = colors.background,
-        contentWindowInsets = WindowInsets.safeDrawing
-    ) { innerPadding ->
+        contentWindowInsets = WindowInsets(0, 0, 0, 0)
+    ) { _ ->
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .background(colors.background)
         ) {
-            // Ambient glassmorphic radial orbs
+            // Fast 120Hz radial aura layers (no GPU-blocking Modifier.blur)
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -270,29 +281,34 @@ fun ToMusicApp(
                                 ambientGlowColor.copy(alpha = colors.ambientOrbAlpha),
                                 Color.Transparent
                             ),
-                            radius = 900f
+                            radius = 950f
                         )
                     )
             )
             Box(
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
-                    .size(320.dp)
-                    .blur(80.dp)
-                    .background(colors.accentSky.copy(alpha = colors.secondaryOrbAlpha), CircleShape)
+                    .size(340.dp)
+                    .background(
+                        Brush.radialGradient(
+                            colors = listOf(
+                                colors.accentSky.copy(alpha = colors.secondaryOrbAlpha),
+                                Color.Transparent
+                            )
+                        )
+                    )
             )
 
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(innerPadding)
+                    .statusBarsPadding()
             ) {
-                // Sticky App Header (Clean Brand + Auto-sync indicator + Language & Theme Glass Controls)
+                // Clean Native Top App Bar (Title + Search + Settings)
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(58.dp)
-                        .background(colors.headerBackground)
+                        .height(56.dp)
                         .padding(horizontal = 16.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
@@ -304,7 +320,7 @@ fun ToMusicApp(
                         CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
                             Text(
                                 text = s.brandName,
-                                fontSize = 17.sp,
+                                fontSize = 20.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = colors.textStrong
                             )
@@ -317,7 +333,6 @@ fun ToMusicApp(
                                 modifier = Modifier
                                     .clip(CircleShape)
                                     .background(colors.glassSurfaceElevated)
-                                    .border(1.dp, colors.glassBorder, CircleShape)
                                     .padding(horizontal = 10.dp, vertical = 4.dp)
                             ) {
                                 CircularProgressIndicator(
@@ -336,75 +351,46 @@ fun ToMusicApp(
 
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        horizontalArrangement = Arrangement.spacedBy(2.dp)
                     ) {
-                        // Subtle manual rescan trigger (no "Add Song" button)
-                        Box(
-                            contentAlignment = Alignment.Center,
-                            modifier = Modifier
-                                .size(40.dp)
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(colors.glassSurfaceElevated)
-                                .border(1.dp, colors.glassBorderStrong, RoundedCornerShape(12.dp))
-                                .clickable(enabled = !state.isScanningDevice) {
-                                    if (state.hasAudioPermission) {
-                                        viewModel.refreshDeviceLibrary(quiet = false, resetIgnored = true)
-                                    } else {
-                                        requestAudioAccess()
-                                    }
+                        IconButton(
+                            onClick = {
+                                if (isSearchOpen && state.searchQuery.isNotEmpty()) {
+                                    viewModel.setSearchQuery("")
                                 }
-                                .testTag("rescan_library_button")
+                                isSearchOpen = !isSearchOpen
+                            },
+                            modifier = Modifier
+                                .size(44.dp)
+                                .testTag("header_search_button")
                         ) {
                             Icon(
-                                imageVector = Icons.Rounded.Refresh,
-                                contentDescription = s.rescanDesc,
+                                imageVector = Icons.Rounded.Search,
+                                contentDescription = s.searchActionDesc,
+                                tint = if (isSearchOpen || state.searchQuery.isNotEmpty()) {
+                                    colors.accentSkyText
+                                } else {
+                                    colors.textSecondary
+                                },
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
+
+                        IconButton(
+                            onClick = viewModel::openSettingsModal,
+                            modifier = Modifier
+                                .size(44.dp)
+                                .testTag("header_settings_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Settings,
+                                contentDescription = s.settingsDesc,
                                 tint = colors.textSecondary,
-                                modifier = Modifier.size(18.dp)
-                            )
-                        }
-
-                        // Language Switch Pill (System default -> toggleable FA / EN)
-                        Box(
-                            contentAlignment = Alignment.Center,
-                            modifier = Modifier
-                                .heightIn(min = 40.dp)
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(colors.glassSurfaceElevated)
-                                .border(1.dp, colors.glassBorderStrong, RoundedCornerShape(12.dp))
-                                .clickable { viewModel.toggleLanguage() }
-                                .padding(horizontal = 12.dp)
-                                .testTag("language_toggle_button")
-                        ) {
-                            Text(
-                                text = s.switchLangLabel,
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                color = colors.textStrong
-                            )
-                        }
-
-                        // Theme Switch Button (Dark default <-> Frosted Glass Light)
-                        Box(
-                            contentAlignment = Alignment.Center,
-                            modifier = Modifier
-                                .size(40.dp)
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(colors.glassSurfaceElevated)
-                                .border(1.dp, colors.glassBorderStrong, RoundedCornerShape(12.dp))
-                                .clickable { viewModel.toggleThemeMode() }
-                                .testTag("theme_toggle_button")
-                        ) {
-                            Icon(
-                                imageVector = if (colors.isDark) Icons.Rounded.LightMode else Icons.Rounded.DarkMode,
-                                contentDescription = if (colors.isDark) s.switchToLightDesc else s.switchToDarkDesc,
-                                tint = if (colors.isDark) colors.accentAmber else colors.accentIndigo,
-                                modifier = Modifier.size(18.dp)
+                                modifier = Modifier.size(22.dp)
                             )
                         }
                     }
                 }
-
-                HorizontalDivider(color = colors.glassBorder)
 
                 // Offline indicator banner
                 AnimatedVisibility(visible = !state.isOnline) {
@@ -412,7 +398,7 @@ fun ToMusicApp(
                         modifier = Modifier
                             .fillMaxWidth()
                             .background(colors.accentAmber.copy(alpha = 0.12f))
-                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                            .padding(horizontal = 16.dp, vertical = 7.dp),
                         horizontalArrangement = Arrangement.Center,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
@@ -432,35 +418,33 @@ fun ToMusicApp(
                     }
                 }
 
-                // Adaptive Main Content (Phone vs Tablet/Foldable Two-Pane)
+                // Adaptive Full-Screen Content (Compact Edge-to-Edge Phone vs Two-Pane Tablet)
                 BoxWithConstraints(
                     modifier = Modifier
                         .weight(1f)
                         .fillMaxWidth()
-                        .padding(12.dp)
                 ) {
                     val isTwoPane = maxWidth >= 840.dp
 
                     if (state.isInitialLoading) {
                         Row(
-                            modifier = Modifier.fillMaxSize(),
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(if (isTwoPane) 16.dp else 12.dp),
                             horizontalArrangement = Arrangement.spacedBy(16.dp)
                         ) {
                             Column(
                                 modifier = Modifier
                                     .weight(1.15f)
                                     .fillMaxHeight()
-                                    .clip(RoundedCornerShape(26.dp))
-                                    .background(colors.glassSurface)
-                                    .border(1.dp, colors.glassBorderStrong, RoundedCornerShape(26.dp))
-                                    .padding(20.dp),
+                                    .padding(8.dp),
                                 verticalArrangement = Arrangement.spacedBy(12.dp)
                             ) {
-                                repeat(4) {
+                                repeat(5) {
                                     Box(
                                         modifier = Modifier
                                             .fillMaxWidth()
-                                            .height(54.dp)
+                                            .height(58.dp)
                                             .clip(RoundedCornerShape(16.dp))
                                             .background(colors.glassSurfaceElevated)
                                     )
@@ -473,13 +457,15 @@ fun ToMusicApp(
                                         .fillMaxHeight()
                                         .clip(RoundedCornerShape(26.dp))
                                         .background(colors.glassSurface)
-                                        .border(1.dp, colors.glassBorderStrong, RoundedCornerShape(26.dp))
                                 )
                             }
                         }
                     } else if (isTwoPane) {
                         Row(
-                            modifier = Modifier.fillMaxSize(),
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(horizontal = 16.dp, vertical = 12.dp)
+                                .navigationBarsPadding(),
                             horizontalArrangement = Arrangement.spacedBy(18.dp)
                         ) {
                             TrackListPanel(
@@ -493,6 +479,7 @@ fun ToMusicApp(
                                 selectedAlbum = state.selectedAlbum,
                                 selectedArtist = state.selectedArtist,
                                 searchQuery = state.searchQuery,
+                                isSearchOpen = isSearchOpen,
                                 sortMode = state.sortMode,
                                 favoriteCount = state.favoriteCount,
                                 recentCount = state.recentCount,
@@ -502,6 +489,7 @@ fun ToMusicApp(
                                 isImporting = state.isImporting,
                                 hasAudioPermission = state.hasAudioPermission,
                                 showDesktopJumpButton = true,
+                                listBottomPadding = 76.dp,
                                 onLibraryTabChange = viewModel::setLibraryTab,
                                 onSelectAlbum = viewModel::selectAlbum,
                                 onSelectArtist = viewModel::selectArtist,
@@ -533,8 +521,7 @@ fun ToMusicApp(
                             PlayerStage(
                                 activeTrack = state.activeTrack,
                                 isPlaying = state.isPlaying,
-                                currentTimeSec = state.currentTimeSec,
-                                durationSec = state.durationSec,
+                                progressFlow = viewModel.playbackProgressFlow,
                                 volume = state.volume,
                                 shuffle = state.shuffle,
                                 repeatMode = state.repeatMode,
@@ -559,13 +546,15 @@ fun ToMusicApp(
                                 onOpenRingtoneMaker = { viewModel.openRingtoneModal(state.activeTrack?.id) },
                                 onOpenEqualizer = viewModel::openEqModal,
                                 onOpenEditTrack = { viewModel.openEditModal(state.activeTrack?.id) },
+                                isFullScreen = false,
                                 modifier = Modifier
                                     .weight(1f)
                                     .fillMaxHeight()
                             )
                         }
                     } else {
-                        // Compact Phone Layout
+                        // Full-Screen Edge-to-Edge Phone Layout
+                        val showMiniPlayer = state.activeTrack != null && !state.isSelectionMode
                         Box(modifier = Modifier.fillMaxSize()) {
                             TrackListPanel(
                                 allTracks = state.allTracks,
@@ -578,6 +567,7 @@ fun ToMusicApp(
                                 selectedAlbum = state.selectedAlbum,
                                 selectedArtist = state.selectedArtist,
                                 searchQuery = state.searchQuery,
+                                isSearchOpen = isSearchOpen,
                                 sortMode = state.sortMode,
                                 favoriteCount = state.favoriteCount,
                                 recentCount = state.recentCount,
@@ -587,6 +577,7 @@ fun ToMusicApp(
                                 isImporting = state.isImporting,
                                 hasAudioPermission = state.hasAudioPermission,
                                 showDesktopJumpButton = false,
+                                listBottomPadding = if (showMiniPlayer) 96.dp else 28.dp,
                                 onLibraryTabChange = viewModel::setLibraryTab,
                                 onSelectAlbum = viewModel::selectAlbum,
                                 onSelectArtist = viewModel::selectArtist,
@@ -612,61 +603,69 @@ fun ToMusicApp(
                                 onLoadStarterTracks = viewModel::loadStarterTracks,
                                 modifier = Modifier
                                     .fillMaxSize()
-                                    .padding(
-                                        bottom = if (state.activeTrack != null && !state.isSelectionMode) 82.dp else 0.dp
-                                    )
+                                    .then(if (state.isSelectionMode) Modifier.navigationBarsPadding() else Modifier)
                             )
 
-                            // Mobile floating jump-to-active pill
                             val active = state.activeTrack
-                            if (active != null && !state.isSelectionMode && !state.isMobileSheetOpen) {
-                                Column(
-                                    modifier = Modifier
-                                        .align(Alignment.BottomCenter)
-                                        .fillMaxWidth(),
-                                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                        modifier = Modifier
-                                            .align(Alignment.End)
-                                            .heightIn(min = 42.dp)
-                                            .clip(CircleShape)
-                                            .background(colors.modalBackground)
-                                            .border(1.dp, colors.accentSky.copy(alpha = 0.35f), CircleShape)
-                                            .clickable { viewModel.jumpToActive() }
-                                            .padding(horizontal = 14.dp, vertical = 9.dp)
-                                            .testTag("mobile_jump_to_active_button")
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Rounded.MyLocation,
-                                            contentDescription = s.jumpToActiveDesc,
-                                            tint = colors.accentSkyText,
-                                            modifier = Modifier.size(16.dp)
-                                        )
-                                        Text(
-                                            text = s.activeTrackPill,
-                                            fontSize = 12.sp,
-                                            fontWeight = FontWeight.Medium,
-                                            color = colors.accentSkySoft
-                                        )
-                                    }
-
-                                    MobileMiniPlayer(
-                                        activeTrack = active,
-                                        isPlaying = state.isPlaying,
-                                        currentTimeSec = state.currentTimeSec,
-                                        durationSec = state.durationSec,
-                                        onTogglePlay = viewModel::togglePlay,
-                                        onNext = { viewModel.handlePlayNext(false) },
-                                        onExpand = { viewModel.setMobileSheetOpen(true) }
-                                    )
-                                }
+                            if (active != null && !state.isSelectionMode) {
+                                MobileMiniPlayer(
+                                    activeTrack = active,
+                                    isPlaying = state.isPlaying,
+                                    progressFlow = viewModel.playbackProgressFlow,
+                                    onTogglePlay = viewModel::togglePlay,
+                                    onNext = { viewModel.handlePlayNext(false) },
+                                    onExpand = { viewModel.setMobileSheetOpen(true) },
+                                    modifier = Modifier.align(Alignment.BottomCenter)
+                                )
                             }
                         }
                     }
                 }
+            }
+
+            // True 100% Full-Screen Native Now Playing Overlay
+            AnimatedVisibility(
+                visible = state.isMobileSheetOpen,
+                enter = slideInVertically(
+                    animationSpec = spring(stiffness = Spring.StiffnessMediumLow)
+                ) { it } + fadeIn(),
+                exit = slideOutVertically(
+                    animationSpec = spring(stiffness = Spring.StiffnessMedium)
+                ) { it } + fadeOut(),
+                modifier = Modifier.fillMaxSize()
+            ) {
+                PlayerStage(
+                    activeTrack = state.activeTrack,
+                    isPlaying = state.isPlaying,
+                    progressFlow = viewModel.playbackProgressFlow,
+                    volume = state.volume,
+                    shuffle = state.shuffle,
+                    repeatMode = state.repeatMode,
+                    sleepMinutesLeft = state.sleepMinutesLeft,
+                    eqPreset = state.eqPreset,
+                    playbackRate = state.playbackRate,
+                    upNextTracks = state.upNextTracks,
+                    manualQueueCount = state.manualQueueIds.size,
+                    onTogglePlay = viewModel::togglePlay,
+                    onNext = { viewModel.handlePlayNext(false) },
+                    onPrev = viewModel::handlePlayPrev,
+                    onSeek = viewModel::seekTo,
+                    onVolumeChange = viewModel::setVolume,
+                    onToggleShuffle = viewModel::toggleShuffle,
+                    onCycleRepeat = viewModel::cycleRepeatMode,
+                    onSetSleepTimer = viewModel::setSleepTimer,
+                    onSelectTrack = { viewModel.loadAndPlayTrack(it, true) },
+                    onClearManualQueue = viewModel::clearManualQueue,
+                    onJumpToActiveInList = viewModel::jumpToActive,
+                    onToggleFavorite = viewModel::toggleFavorite,
+                    onOpenLyrics = { viewModel.openLyricsModal(state.activeTrack?.id) },
+                    onOpenRingtoneMaker = { viewModel.openRingtoneModal(state.activeTrack?.id) },
+                    onOpenEqualizer = viewModel::openEqModal,
+                    onOpenEditTrack = { viewModel.openEditModal(state.activeTrack?.id) },
+                    isFullScreen = true,
+                    onCloseMobileSheet = { viewModel.setMobileSheetOpen(false) },
+                    modifier = Modifier.fillMaxSize()
+                )
             }
 
             // Status Notice Toast Banner
@@ -676,7 +675,8 @@ fun ToMusicApp(
                 exit = fadeOut() + slideOutVertically { -it },
                 modifier = Modifier
                     .align(Alignment.TopCenter)
-                    .padding(top = 72.dp, start = 16.dp, end = 16.dp)
+                    .statusBarsPadding()
+                    .padding(top = 64.dp, start = 16.dp, end = 16.dp)
             ) {
                 state.statusNotice?.let { notice ->
                     Row(
@@ -707,56 +707,24 @@ fun ToMusicApp(
         }
     }
 
-    // Mobile Full-Screen Player Sheet
-    if (state.isMobileSheetOpen) {
-        val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-        ModalBottomSheet(
-            onDismissRequest = { viewModel.setMobileSheetOpen(false) },
-            sheetState = sheetState,
-            containerColor = colors.sheetBackground,
-            dragHandle = null
-        ) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .fillMaxHeight(0.95f)
-                    .statusBarsPadding()
-                    .navigationBarsPadding()
-                    .padding(10.dp)
-            ) {
-                PlayerStage(
-                    activeTrack = state.activeTrack,
-                    isPlaying = state.isPlaying,
-                    currentTimeSec = state.currentTimeSec,
-                    durationSec = state.durationSec,
-                    volume = state.volume,
-                    shuffle = state.shuffle,
-                    repeatMode = state.repeatMode,
-                    sleepMinutesLeft = state.sleepMinutesLeft,
-                    eqPreset = state.eqPreset,
-                    playbackRate = state.playbackRate,
-                    upNextTracks = state.upNextTracks,
-                    manualQueueCount = state.manualQueueIds.size,
-                    onTogglePlay = viewModel::togglePlay,
-                    onNext = { viewModel.handlePlayNext(false) },
-                    onPrev = viewModel::handlePlayPrev,
-                    onSeek = viewModel::seekTo,
-                    onVolumeChange = viewModel::setVolume,
-                    onToggleShuffle = viewModel::toggleShuffle,
-                    onCycleRepeat = viewModel::cycleRepeatMode,
-                    onSetSleepTimer = viewModel::setSleepTimer,
-                    onSelectTrack = { viewModel.loadAndPlayTrack(it, true) },
-                    onClearManualQueue = viewModel::clearManualQueue,
-                    onJumpToActiveInList = viewModel::jumpToActive,
-                    onToggleFavorite = viewModel::toggleFavorite,
-                    onOpenLyrics = { viewModel.openLyricsModal(state.activeTrack?.id) },
-                    onOpenRingtoneMaker = { viewModel.openRingtoneModal(state.activeTrack?.id) },
-                    onOpenEqualizer = viewModel::openEqModal,
-                    onOpenEditTrack = { viewModel.openEditModal(state.activeTrack?.id) },
-                    onCloseMobileSheet = { viewModel.setMobileSheetOpen(false) }
-                )
-            }
-        }
+    // Settings Modal (Appearance, Language, Library Rescan, EQ)
+    if (state.showSettingsModal) {
+        SettingsModal(
+            themeMode = state.themeMode,
+            appLanguage = state.appLanguage,
+            trackCount = state.allTracks.size,
+            hasAudioPermission = state.hasAudioPermission,
+            isScanningDevice = state.isScanningDevice,
+            isImporting = state.isImporting,
+            onSelectThemeMode = viewModel::setThemeMode,
+            onSelectLanguage = viewModel::setLanguage,
+            onRescanDevice = { viewModel.refreshDeviceLibrary(quiet = false, resetIgnored = true) },
+            onRequestAudioPermission = requestAudioAccess,
+            onImportManually = openAudioPicker,
+            onLoadStarterTracks = viewModel::loadStarterTracks,
+            onOpenEqualizer = viewModel::openEqModal,
+            onClose = viewModel::closeSettingsModal
+        )
     }
 
     // Lyrics Modal
@@ -764,8 +732,7 @@ fun ToMusicApp(
     if (state.showLyricsModal && modalTrack != null) {
         LyricsModal(
             track = modalTrack,
-            currentTimeSec = state.currentTimeSec,
-            durationSec = state.durationSec,
+            progressFlow = viewModel.playbackProgressFlow,
             isPlaying = state.isPlaying,
             playbackRate = state.playbackRate,
             onTogglePlay = viewModel::togglePlay,

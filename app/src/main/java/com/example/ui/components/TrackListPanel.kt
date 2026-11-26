@@ -85,6 +85,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -94,6 +95,7 @@ import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import com.example.data.model.AlbumGroup
 import com.example.data.model.ArtistGroup
 import com.example.data.model.LibraryTab
@@ -121,6 +123,7 @@ fun TrackListPanel(
     selectedAlbum: String?,
     selectedArtist: String?,
     searchQuery: String,
+    isSearchOpen: Boolean,
     sortMode: SortMode,
     favoriteCount: Int,
     recentCount: Int,
@@ -130,6 +133,7 @@ fun TrackListPanel(
     isImporting: Boolean,
     hasAudioPermission: Boolean,
     showDesktopJumpButton: Boolean,
+    listBottomPadding: androidx.compose.ui.unit.Dp = 16.dp,
     onLibraryTabChange: (LibraryTab) -> Unit,
     onSelectAlbum: (String?) -> Unit,
     onSelectArtist: (String?) -> Unit,
@@ -222,122 +226,31 @@ fun TrackListPanel(
         }
     }
 
-    Box(
-        modifier = modifier
+    val panelModifier = if (showDesktopJumpButton) {
+        modifier
             .fillMaxSize()
             .clip(RoundedCornerShape(26.dp))
             .background(colors.glassSurface)
             .border(1.dp, colors.glassBorderStrong, RoundedCornerShape(26.dp))
-    ) {
+    } else {
+        modifier.fillMaxSize()
+    }
+
+    Box(modifier = panelModifier) {
         Column(modifier = Modifier.fillMaxSize()) {
-            // Top Panel Header
+            // Native Library Controls Header (edge-to-edge)
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 14.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Text(
-                            text = s.libraryTitle,
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = colors.textStrong
-                        )
-                        Text(text = "·", fontSize = 13.sp, color = colors.textMuted)
-                        Text(
-                            text = s.tracksCount(totalTrackCount),
-                            fontFamily = JetBrainsMonoFontFamily,
-                            fontSize = 12.sp,
-                            color = colors.textMuted
-                        )
-                    }
-
-                    if (!isOverviewMode && libraryTab != LibraryTab.RECENT && totalTrackCount > 0) {
-                        Box {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                modifier = Modifier
-                                    .heightIn(min = 38.dp)
-                                    .clip(RoundedCornerShape(12.dp))
-                                    .background(colors.glassSurfaceElevated)
-                                    .border(1.dp, colors.glassBorder, RoundedCornerShape(12.dp))
-                                    .clickable { showSortMenu = true }
-                                    .padding(horizontal = 12.dp)
-                                    .testTag("sort_menu_button")
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Rounded.SwapVert,
-                                    contentDescription = s.sortDesc,
-                                    tint = colors.textMuted,
-                                    modifier = Modifier.size(15.dp)
-                                )
-                                Text(
-                                    text = sortMode.label(s.isFa),
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Medium,
-                                    color = colors.textSecondary
-                                )
-                            }
-
-                            DropdownMenu(
-                                expanded = showSortMenu,
-                                onDismissRequest = { showSortMenu = false },
-                                modifier = Modifier.background(colors.modalBackground)
-                            ) {
-                                SortMode.entries.forEach { mode ->
-                                    DropdownMenuItem(
-                                        text = {
-                                            Row(
-                                                modifier = Modifier.fillMaxWidth(),
-                                                horizontalArrangement = Arrangement.SpaceBetween,
-                                                verticalAlignment = Alignment.CenterVertically
-                                            ) {
-                                                Text(
-                                                    text = mode.label(s.isFa),
-                                                    fontSize = 12.sp,
-                                                    fontWeight = if (sortMode == mode) FontWeight.SemiBold else FontWeight.Normal,
-                                                    color = if (sortMode == mode) colors.textStrong else colors.textSecondary
-                                                )
-                                                if (sortMode == mode) {
-                                                    Icon(
-                                                        imageVector = Icons.Rounded.Check,
-                                                        contentDescription = null,
-                                                        tint = colors.accentSkyText,
-                                                        modifier = Modifier.size(16.dp)
-                                                    )
-                                                }
-                                            }
-                                        },
-                                        onClick = {
-                                            onSortChange(mode)
-                                            showSortMenu = false
-                                        }
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // 5 Library Tabs
+                // 5 Native Filter Chips (no heavy outer box)
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clip(RoundedCornerShape(14.dp))
-                        .background(colors.glassInput)
-                        .padding(4.dp)
                         .horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     val tabs = listOf(
                         Triple(LibraryTab.ALL, Icons.Rounded.MusicNote, totalTrackCount),
@@ -353,87 +266,211 @@ fun TrackListPanel(
                             horizontalArrangement = Arrangement.spacedBy(6.dp),
                             modifier = Modifier
                                 .heightIn(min = 38.dp)
-                                .clip(RoundedCornerShape(10.dp))
-                                .background(if (active) colors.glassSurfaceSelected else Color.Transparent)
+                                .clip(CircleShape)
+                                .background(
+                                    if (active) colors.glassSurfaceSelected
+                                    else colors.glassSurfaceElevated
+                                )
+                                .border(
+                                    1.dp,
+                                    if (active) colors.accentSky.copy(alpha = 0.40f) else colors.glassBorder,
+                                    CircleShape
+                                )
                                 .clickable { onLibraryTabChange(tab) }
-                                .padding(horizontal = 12.dp)
+                                .padding(horizontal = 14.dp)
                                 .testTag("library_tab_${tab.name.lowercase()}")
                         ) {
                             Icon(
                                 imageVector = icon,
                                 contentDescription = null,
-                                tint = if (active) colors.textStrong else colors.textMuted,
+                                tint = if (active) colors.accentSkyText else colors.textMuted,
                                 modifier = Modifier.size(15.dp)
                             )
                             Text(
                                 text = tab.label(s.isFa),
                                 fontSize = 12.sp,
-                                fontWeight = FontWeight.Medium,
+                                fontWeight = if (active) FontWeight.SemiBold else FontWeight.Medium,
                                 color = if (active) colors.textStrong else colors.textMuted,
                                 maxLines = 1
                             )
                             if (count != null) {
                                 Text(
-                                    text = "($count)",
+                                    text = "$count",
                                     fontFamily = JetBrainsMonoFontFamily,
                                     fontSize = 11.sp,
-                                    color = if (active) colors.textPrimary.copy(alpha = 0.85f) else colors.textSubtle
+                                    color = if (active) colors.accentSkyText else colors.textSubtle
                                 )
                             }
                         }
                     }
                 }
 
-                // Search input
-                OutlinedTextField(
-                    value = searchQuery,
-                    onValueChange = onSearchChange,
-                    placeholder = {
-                        Text(
-                            text = searchPlaceholder,
-                            fontSize = 12.sp,
-                            color = colors.textSubtle,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    },
-                    leadingIcon = {
-                        Icon(
-                            imageVector = Icons.Rounded.Search,
-                            contentDescription = null,
-                            tint = colors.textMuted,
-                            modifier = Modifier.size(18.dp)
-                        )
-                    },
-                    trailingIcon = {
-                        if (searchQuery.isNotEmpty()) {
-                            IconButton(
-                                onClick = { onSearchChange("") },
-                                modifier = Modifier.size(36.dp)
+                // Sub-row: Track count + Locate Active + Sort pill
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = s.tracksCount(totalTrackCount),
+                        fontFamily = JetBrainsMonoFontFamily,
+                        fontSize = 12.sp,
+                        color = colors.textMuted
+                    )
+
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        if (activeTrackId != null && !isSelectionMode && !showDesktopJumpButton) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(5.dp),
+                                modifier = Modifier
+                                    .heightIn(min = 34.dp)
+                                    .clip(CircleShape)
+                                    .background(colors.glassSurfaceElevated)
+                                    .border(1.dp, colors.accentSky.copy(alpha = 0.35f), CircleShape)
+                                    .clickable { onJumpToActive() }
+                                    .padding(horizontal = 10.dp)
+                                    .testTag("mobile_jump_to_active_button")
                             ) {
                                 Icon(
-                                    imageVector = Icons.Rounded.Close,
-                                    contentDescription = s.clearSearchDesc,
-                                    tint = colors.textMuted,
-                                    modifier = Modifier.size(16.dp)
+                                    imageVector = Icons.Rounded.MyLocation,
+                                    contentDescription = s.jumpToActiveDesc,
+                                    tint = colors.accentSkyText,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Text(
+                                    text = s.activeTrackPill,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    color = colors.accentSkyText
                                 )
                             }
                         }
-                    },
-                    singleLine = true,
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = colors.accentIndigo.copy(alpha = 0.65f),
-                        unfocusedBorderColor = colors.glassBorder,
-                        focusedContainerColor = colors.glassInput,
-                        unfocusedContainerColor = colors.glassInput,
-                        focusedTextColor = colors.textPrimary,
-                        unfocusedTextColor = colors.textPrimary
-                    ),
-                    shape = RoundedCornerShape(14.dp),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("library_search_input")
-                )
+
+                        if (!isOverviewMode && libraryTab != LibraryTab.RECENT && totalTrackCount > 0) {
+                            Box {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(5.dp),
+                                    modifier = Modifier
+                                        .heightIn(min = 34.dp)
+                                        .clip(CircleShape)
+                                        .background(colors.glassSurfaceElevated)
+                                        .border(1.dp, colors.glassBorder, CircleShape)
+                                        .clickable { showSortMenu = true }
+                                        .padding(horizontal = 10.dp)
+                                        .testTag("sort_menu_button")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.SwapVert,
+                                        contentDescription = s.sortDesc,
+                                        tint = colors.textMuted,
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                    Text(
+                                        text = sortMode.label(s.isFa),
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Medium,
+                                        color = colors.textSecondary
+                                    )
+                                }
+
+                                DropdownMenu(
+                                    expanded = showSortMenu,
+                                    onDismissRequest = { showSortMenu = false },
+                                    modifier = Modifier.background(colors.modalBackground)
+                                ) {
+                                    SortMode.entries.forEach { mode ->
+                                        DropdownMenuItem(
+                                            text = {
+                                                Row(
+                                                    modifier = Modifier.fillMaxWidth(),
+                                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                                    verticalAlignment = Alignment.CenterVertically
+                                                ) {
+                                                    Text(
+                                                        text = mode.label(s.isFa),
+                                                        fontSize = 12.sp,
+                                                        fontWeight = if (sortMode == mode) FontWeight.SemiBold else FontWeight.Normal,
+                                                        color = if (sortMode == mode) colors.textStrong else colors.textSecondary
+                                                    )
+                                                    if (sortMode == mode) {
+                                                        Icon(
+                                                            imageVector = Icons.Rounded.Check,
+                                                            contentDescription = null,
+                                                            tint = colors.accentSkyText,
+                                                            modifier = Modifier.size(16.dp)
+                                                        )
+                                                    }
+                                                }
+                                            },
+                                            onClick = {
+                                                onSortChange(mode)
+                                                showSortMenu = false
+                                            }
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Collapsible Search input (shown when toggled or active query)
+                AnimatedVisibility(visible = isSearchOpen || searchQuery.isNotEmpty()) {
+                    OutlinedTextField(
+                        value = searchQuery,
+                        onValueChange = onSearchChange,
+                        placeholder = {
+                            Text(
+                                text = searchPlaceholder,
+                                fontSize = 12.sp,
+                                color = colors.textSubtle,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.Rounded.Search,
+                                contentDescription = null,
+                                tint = colors.textMuted,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        },
+                        trailingIcon = {
+                            if (searchQuery.isNotEmpty()) {
+                                IconButton(
+                                    onClick = { onSearchChange("") },
+                                    modifier = Modifier.size(36.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Close,
+                                        contentDescription = s.clearSearchDesc,
+                                        tint = colors.textMuted,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                            }
+                        },
+                        singleLine = true,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = colors.accentIndigo.copy(alpha = 0.65f),
+                            unfocusedBorderColor = colors.glassBorder,
+                            focusedContainerColor = colors.glassInput,
+                            unfocusedContainerColor = colors.glassInput,
+                            focusedTextColor = colors.textPrimary,
+                            unfocusedTextColor = colors.textPrimary
+                        ),
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("library_search_input")
+                    )
+                }
 
                 // Device Audio Permission Prompt Card (only if audio permission hasn't been granted yet)
                 AnimatedVisibility(visible = !hasAudioPermission && totalTrackCount > 0) {
@@ -646,12 +683,16 @@ fun TrackListPanel(
                         } else {
                             LazyVerticalGrid(
                                 columns = GridCells.Adaptive(minSize = 148.dp),
-                                contentPadding = PaddingValues(14.dp),
+                                contentPadding = PaddingValues(start = 14.dp, end = 14.dp, top = 12.dp, bottom = listBottomPadding),
                                 verticalArrangement = Arrangement.spacedBy(10.dp),
                                 horizontalArrangement = Arrangement.spacedBy(10.dp),
                                 modifier = Modifier.fillMaxSize()
                             ) {
-                                items(albumGroups, key = { it.name }) { album ->
+                                items(
+                                    items = albumGroups,
+                                    key = { it.name },
+                                    contentType = { "album" }
+                                ) { album ->
                                     val hasActive = album.tracks.any { it.id == activeTrackId }
                                     AlbumGridCard(
                                         album = album,
@@ -672,11 +713,15 @@ fun TrackListPanel(
                             )
                         } else {
                             LazyColumn(
-                                contentPadding = PaddingValues(14.dp),
+                                contentPadding = PaddingValues(start = 14.dp, end = 14.dp, top = 12.dp, bottom = listBottomPadding),
                                 verticalArrangement = Arrangement.spacedBy(8.dp),
                                 modifier = Modifier.fillMaxSize()
                             ) {
-                                items(artistGroups, key = { it.name }) { artist ->
+                                items(
+                                    items = artistGroups,
+                                    key = { it.name },
+                                    contentType = { "artist" }
+                                ) { artist ->
                                     val hasActive = artist.tracks.any { it.id == activeTrackId }
                                     ArtistRowCard(
                                         artist = artist,
@@ -691,12 +736,12 @@ fun TrackListPanel(
                     else -> {
                         LazyColumn(
                             state = listState,
-                            contentPadding = PaddingValues(start = 10.dp, end = 10.dp, top = 10.dp, bottom = 76.dp),
-                            verticalArrangement = Arrangement.spacedBy(4.dp),
+                            contentPadding = PaddingValues(start = 10.dp, end = 10.dp, top = 6.dp, bottom = listBottomPadding),
+                            verticalArrangement = Arrangement.spacedBy(2.dp),
                             modifier = Modifier.fillMaxSize()
                         ) {
                             if (libraryTab == LibraryTab.ALBUMS && activeAlbumGroup != null) {
-                                item(key = "album_header") {
+                                item(key = "album_header", contentType = "header") {
                                     CollectionDrillHeader(
                                         title = activeAlbumGroup.name,
                                         subtitle = "${activeAlbumGroup.artistSummary} · ${s.songsCount(tracks.size)}",
@@ -712,7 +757,7 @@ fun TrackListPanel(
                             }
 
                             if (libraryTab == LibraryTab.ARTISTS && activeArtistGroup != null) {
-                                item(key = "artist_header") {
+                                item(key = "artist_header", contentType = "header") {
                                     CollectionDrillHeader(
                                         title = activeArtistGroup.name,
                                         subtitle = "${s.songsCount(tracks.size)} · ${s.albumsCount(activeArtistGroup.albumCount)}",
@@ -728,7 +773,7 @@ fun TrackListPanel(
                             }
 
                             if (tracks.isEmpty()) {
-                                item(key = "empty_filtered") {
+                                item(key = "empty_filtered", contentType = "empty") {
                                     val msg = when {
                                         libraryTab == LibraryTab.FAVORITES && searchQuery.isBlank() -> s.noFavoritesYet
                                         libraryTab == LibraryTab.RECENT && searchQuery.isBlank() -> s.noRecentYet
@@ -744,7 +789,11 @@ fun TrackListPanel(
                                     )
                                 }
                             } else {
-                                items(tracks, key = { it.id }) { track ->
+                                items(
+                                    items = tracks,
+                                    key = { it.id },
+                                    contentType = { "track" }
+                                ) { track ->
                                     val isActive = track.id == activeTrackId
                                     val isSelected = track.id in selectedIds
                                     val isHighlighted = track.id == highlightedId
@@ -1118,20 +1167,15 @@ private fun TrackRowItem(
         isActive -> colors.glassSurfaceSelected
         else -> Color.Transparent
     }
-    val borderColor = when {
-        isHighlighted -> colors.accentSky.copy(alpha = 0.75f)
-        isSelected -> colors.accentIndigo.copy(alpha = 0.45f)
-        isActive -> colors.glassBorderStrong
-        else -> Color.Transparent
-    }
+    val hasPill = isHighlighted || isSelected || isActive
+    val rowShape = remember { RoundedCornerShape(16.dp) }
 
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = 64.dp)
-            .clip(RoundedCornerShape(18.dp))
-            .background(bgColor)
-            .border(1.dp, borderColor, RoundedCornerShape(18.dp))
+            .clip(rowShape)
+            .then(if (hasPill) Modifier.background(bgColor) else Modifier)
             .combinedClickable(
                 onClick = onClick,
                 onLongClick = onLongClick
@@ -1247,14 +1291,22 @@ private fun AlbumGridCard(
 ) {
     val colors = LocalAppColors.current
     val s = LocalStrings.current
-    val shape = RoundedCornerShape(18.dp)
+    val context = LocalContext.current
+    val shape = remember { RoundedCornerShape(18.dp) }
     val coverModel = remember(album.coverFilePath) { resolveCoverModel(album.coverFilePath) }
     var imageError by remember(album.coverFilePath) { mutableStateOf(false) }
+    val imageRequest = remember(coverModel, context) {
+        coverModel?.let {
+            ImageRequest.Builder(context)
+                .data(it)
+                .size(360, 360)
+                .allowHardware(true)
+                .crossfade(false)
+                .build()
+        }
+    }
 
-    val glow = Color.hsl(album.accentHue.toFloat(), 0.78f, if (colors.isDark) 0.62f else 0.66f)
-        .copy(alpha = if (colors.isDark) 0.42f else 0.34f)
     val base = Color.hsl(album.accentHue.toFloat(), 0.40f, if (colors.isDark) 0.16f else 0.85f)
-    val baseEnd = if (colors.isDark) Color(0xFF09090B) else Color(0xFFDDE5F4)
 
     Column(
         modifier = Modifier
@@ -1275,29 +1327,18 @@ private fun AlbumGridCard(
                 .fillMaxWidth()
                 .aspectRatio(1f)
                 .clip(RoundedCornerShape(14.dp))
-                .background(
-                    Brush.linearGradient(
-                        colors = listOf(base, baseEnd),
-                        start = Offset.Zero,
-                        end = Offset(Float.POSITIVE_INFINITY, Float.POSITIVE_INFINITY)
-                    )
-                )
-                .border(1.dp, colors.glassBorder, RoundedCornerShape(14.dp))
+                .background(base)
         ) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(Brush.radialGradient(listOf(glow, Color.Transparent)))
-            )
-            Icon(
-                imageVector = Icons.Rounded.Album,
-                contentDescription = album.name,
-                tint = if (colors.isDark) Color.White.copy(alpha = 0.78f) else Color(0xFF1E293B).copy(alpha = 0.78f),
-                modifier = Modifier.size(42.dp)
-            )
-            if (coverModel != null && !imageError) {
+            if (imageRequest == null || imageError) {
+                Icon(
+                    imageVector = Icons.Rounded.Album,
+                    contentDescription = album.name,
+                    tint = if (colors.isDark) Color.White.copy(alpha = 0.78f) else Color(0xFF1E293B).copy(alpha = 0.78f),
+                    modifier = Modifier.size(42.dp)
+                )
+            } else {
                 AsyncImage(
-                    model = coverModel,
+                    model = imageRequest,
                     contentDescription = album.name,
                     contentScale = ContentScale.Crop,
                     onError = { imageError = true },
