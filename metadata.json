@@ -1,0 +1,6 @@
+{
+  "name": "آواپلیر",
+  "description": "موزیک‌پلیر وب‌اپ قابل نصب روی گوشی (PWA) با تم شیشه‌ای تیره، انیمیشن‌های زنده، انتخاب و حذف چندتایی و پرش به آهنگ در حال پخش",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
